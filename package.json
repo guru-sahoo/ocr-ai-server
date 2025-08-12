@@ -20,5 +20,11 @@
   "bugs": {
     "url": "https://github.com/guru-sahoo/ocr-ai-server/issues"
   },
-  "homepage": "https://github.com/guru-sahoo/ocr-ai-server#readme"
+  "homepage": "https://github.com/guru-sahoo/ocr-ai-server#readme",
+  "dependencies": {
+    "@google-cloud/vertexai": "^1.10.0",
+    "dotenv": "^17.2.1",
+    "fs-extra": "^11.3.1",
+    "p-limit": "^6.2.0"
+  }
 }
