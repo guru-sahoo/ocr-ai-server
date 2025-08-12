@@ -1,0 +1,24 @@
+{
+  "name": "ocr-ai-server",
+  "version": "1.0.0",
+  "description": "Demo AI based OCR server for detecting handwritten odia text and symbols",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/guru-sahoo/ocr-ai-server.git"
+  },
+  "keywords": [
+    "AI",
+    "ML",
+    "OCR"
+  ],
+  "author": "Guru Sahoo",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/guru-sahoo/ocr-ai-server/issues"
+  },
+  "homepage": "https://github.com/guru-sahoo/ocr-ai-server#readme"
+}
