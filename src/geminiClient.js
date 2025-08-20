@@ -1,9 +1,9 @@
 // src/analyzeCells.js
 const fs = require("fs");
 const path = require("path");
+const axios = require("axios");
 const pLimit = require("p-limit");
 const { GoogleAuth } = require("google-auth-library");
-const fetch = require("node-fetch");
 
 // -------------------------------
 // CONFIG
@@ -49,15 +49,10 @@ async function analyzeOneCell(filePath) {
   const imgB64 = fs.readFileSync(filePath).toString("base64");
   const accessToken = await getAccessToken();
 
-  const response = await fetch(
-    `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${MODEL_ID}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+  try {
+    const response = await axios.post(
+      `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${MODEL_ID}:generateContent`,
+      {
         contents: [
           { role: "user", parts: [{ text: CELL_PROMPT }] },
           {
@@ -65,46 +60,58 @@ async function analyzeOneCell(filePath) {
             parts: [{ inlineData: { mimeType: "image/png", data: imgB64 } }],
           },
         ],
-      }),
-    }
-  );
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Gemini API Error: ${errorText}`);
-  }
-
-  const result = await response.json();
-  const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "";
-
-  // -------------------------------
-  // JSON STRICT PARSING
-  // -------------------------------
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed && Object.prototype.hasOwnProperty.call(parsed, "symbol")) {
-      const norm =
-        parsed.symbol === null ? null : String(parsed.symbol).toLowerCase();
-      if (["triangle", "plus", "star"].includes(norm) || norm === null) {
-        return { ok: true, symbol: norm };
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 60000, // ⏱️ 60s timeout for large requests
       }
+    );
+
+    const result = response.data;
+    const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+    // -------------------------------
+    // JSON STRICT PARSING
+    // -------------------------------
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && Object.prototype.hasOwnProperty.call(parsed, "symbol")) {
+        const norm =
+          parsed.symbol === null ? null : String(parsed.symbol).toLowerCase();
+        if (["triangle", "plus", "star"].includes(norm) || norm === null) {
+          return { ok: true, symbol: norm };
+        }
+      }
+    } catch (_) {
+      // ignore and try fallback
     }
-  } catch (_) {
-    // ignore and try fallback
+
+    // -------------------------------
+    // FALLBACK SANITIZER
+    // -------------------------------
+    const lower = text.toLowerCase();
+    if (lower.includes("triangle"))
+      return { ok: true, symbol: "triangle", raw: text };
+    if (lower.includes("plus")) return { ok: true, symbol: "plus", raw: text };
+    if (lower.includes("star")) return { ok: true, symbol: "star", raw: text };
+    if (lower.includes("null") || lower.includes("empty"))
+      return { ok: true, symbol: null, raw: text };
+
+    return { ok: false, symbol: null, raw: text };
+  } catch (err) {
+    if (err.response) {
+      throw new Error(
+        `Gemini API Error: ${err.response.status} ${JSON.stringify(
+          err.response.data
+        )}`
+      );
+    } else {
+      throw new Error(`Request Failed: ${err.message}`);
+    }
   }
-
-  // -------------------------------
-  // FALLBACK SANITIZER
-  // -------------------------------
-  const lower = text.toLowerCase();
-  if (lower.includes("triangle"))
-    return { ok: true, symbol: "triangle", raw: text };
-  if (lower.includes("plus")) return { ok: true, symbol: "plus", raw: text };
-  if (lower.includes("star")) return { ok: true, symbol: "star", raw: text };
-  if (lower.includes("null") || lower.includes("empty"))
-    return { ok: true, symbol: null, raw: text };
-
-  return { ok: false, symbol: null, raw: text };
 }
 
 // -------------------------------
