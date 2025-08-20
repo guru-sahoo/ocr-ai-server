@@ -1,11 +1,20 @@
+// src/analyzeCells.js
 const fs = require("fs");
+const path = require("path");
 const pLimit = require("p-limit");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
-require("dotenv").config();
+const { GoogleAuth } = require("google-auth-library");
+const fetch = require("node-fetch");
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// -------------------------------
+// CONFIG
+// -------------------------------
+const PROJECT_ID = "tz-osepa-3"; // 🔹 replace with your GCP project
+const LOCATION = "us-central1"; // 🔹 choose your region
+const MODEL_ID = "gemini-2.5-pro"; // or gemini-1.5-flash
 
-// Strict JSON prompt — no prose, no markdown.
+// -------------------------------
+// PROMPT
+// -------------------------------
 const CELL_PROMPT = `
 You are given a cropped image of a single table cell that may contain a handwritten symbol.
 
@@ -20,17 +29,57 @@ Rules:
 - Output MUST be valid, standalone JSON. No markdown, no extra fields, no commentary.
 `;
 
-async function analyzeOneCell(filePath, modelName = "gemini-1.5-pro") {
-  const model = genAI.getGenerativeModel({ model: modelName });
+// -------------------------------
+// AUTH TOKEN HELPER
+// -------------------------------
+async function getAccessToken() {
+  const auth = new GoogleAuth({
+    keyFile: path.join(__dirname, "service-account.json"), // 🔹 path to your service account JSON
+    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+  });
+  const client = await auth.getClient();
+  const tokenResponse = await client.getAccessToken();
+  return tokenResponse.token;
+}
+
+// -------------------------------
+// CORE: Analyze one cell
+// -------------------------------
+async function analyzeOneCell(filePath) {
   const imgB64 = fs.readFileSync(filePath).toString("base64");
+  const accessToken = await getAccessToken();
 
-  const result = await model.generateContent([
-    { text: CELL_PROMPT },
-    { inlineData: { mimeType: "image/png", data: imgB64 } },
-  ]);
+  const response = await fetch(
+    `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${MODEL_ID}:generateContent`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        contents: [
+          { role: "user", parts: [{ text: CELL_PROMPT }] },
+          {
+            role: "user",
+            parts: [{ inlineData: { mimeType: "image/png", data: imgB64 } }],
+          },
+        ],
+      }),
+    }
+  );
 
-  const text = result?.response?.text?.() || "";
-  // Attempt to parse strict JSON
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Gemini API Error: ${errorText}`);
+  }
+
+  const result = await response.json();
+  const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+  // -------------------------------
+  // JSON STRICT PARSING
+  // -------------------------------
   try {
     const parsed = JSON.parse(text);
     if (parsed && Object.prototype.hasOwnProperty.call(parsed, "symbol")) {
@@ -40,8 +89,13 @@ async function analyzeOneCell(filePath, modelName = "gemini-1.5-pro") {
         return { ok: true, symbol: norm };
       }
     }
-  } catch (_) {}
-  // Fallback: try to sanitize simple patterns
+  } catch (_) {
+    // ignore and try fallback
+  }
+
+  // -------------------------------
+  // FALLBACK SANITIZER
+  // -------------------------------
   const lower = text.toLowerCase();
   if (lower.includes("triangle"))
     return { ok: true, symbol: "triangle", raw: text };
@@ -49,9 +103,13 @@ async function analyzeOneCell(filePath, modelName = "gemini-1.5-pro") {
   if (lower.includes("star")) return { ok: true, symbol: "star", raw: text };
   if (lower.includes("null") || lower.includes("empty"))
     return { ok: true, symbol: null, raw: text };
+
   return { ok: false, symbol: null, raw: text };
 }
 
+// -------------------------------
+// BATCH: Analyze multiple cells
+// -------------------------------
 async function analyzeCells(cells, { concurrency = 4 } = {}) {
   const limit = pLimit(concurrency);
   const tasks = cells.map((cell) =>
